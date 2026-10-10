@@ -1,0 +1,146 @@
+# =============================================================================
+# n4-ruidosas.rules — as 6 regras EXCLUÍDAS do conjunto testado
+#
+# NÃO fazem parte do conjunto que reproduz os 12 alertas. Estão aqui como
+# ARQUIVO DOCUMENTADO: o que faziam, porque geravam ruído, e o que as
+# substituiu (quando substituídas).
+#
+# ⚠️ Todas comentadas de propósito. Este ficheiro NÃO deve ser carregado
+#    pelo Suricata/OPNsense: se o fizeres, voltas aos ~1330 alertas.
+#    Para testar uma delas isoladamente, descomenta SÓ essa linha.
+#
+# Contexto medido (bateria real, 2026-10-09, 9 cenários de scan):
+#   conjunto antigo -> 1330 alertas
+#   conjunto testado -> 12 alertas
+#
+# Nota de método: as contagens por cenário são medidas. A atribuição
+# regra-a-regra abaixo deriva do TEXTO de cada regra (critério de
+# correspondência + tipo de threshold). Para confirmar por SID, corre
+# `make matriz` com a regra ligada e lê a contagem do SID.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# sid:3400002 — POSSBL PORT SCAN (NMAP -sS)  [destino FORA das portas comuns]
+# -----------------------------------------------------------------------------
+# Regra original:
+# alert tcp any any -> any ![21,22,23,25,53,80,88,110,135,137,138,139,143,161,389,443,445,465,514,587,636,853,993,995,1194,1433,1720,3306,3389,8080,8443,11211,27017,51820] (msg:"POSSBL PORT SCAN (NMAP -sS)"; flow:to_server,stateless; flags:S; window:1024; tcp.mss:1460; threshold:type threshold, track by_src, count 7, seconds 135; classtype:attempted-recon; sid:3400002; priority:2; rev:2;)
+#
+# PORQUE É RUIDOSA
+#  - Duplica a deteção da 3400001: a assinatura de pacote é a MESMA
+#    (flags:S + window:1024 + tcp.mss:1460 = impressão digital do nmap -sS).
+#    Não acrescenta cobertura — só muda o ALCANCE do destino.
+#  - O destino passa a ser "qualquer porta fora da lista", e o limiar cai de
+#    20/70s para 7/135s. Alcance amplo + limiar baixo = ruído.
+#  - Rajadas legítimas de SYN para portas invulgares (descoberta de serviço,
+#    aplicações com muitas ligações, P2P) atingem 7 SYN em 135s.
+#  - A própria 3400001 explica o resultado final de 2 alertas no cenário -sS;
+#    o resto dos 280 medidos vinha desta família.
+#
+# SUBSTITUÍDA POR: 3400001 (mantida ativa) — mesma deteção, sem o alcance extra.
+
+
+# -----------------------------------------------------------------------------
+# sid:3400005 — POSSBL PORT SCAN (NMAP -sX)
+# -----------------------------------------------------------------------------
+# Regra original:
+# alert tcp any any -> any any (msg:"POSSBL PORT SCAN (NMAP -sX)"; flags:FPU; flow:to_server,stateless; threshold:type threshold, track by_src, count 3, seconds 120; classtype:attempted-recon; sid:3400005; rev:2;)
+#
+# PORQUE É RUIDOSA
+#  🎯 A causa raiz é o TIPO de threshold, não a sua contagem.
+#     Com `threshold:type threshold`, o Suricata dispara A CADA N-ésimo
+#     casamento — não dispara uma vez e cala. Com count 3, um scan Xmas de
+#     ~2000 portas gera ~666 alertas.
+#     Esse valor encaixa exatamente no medido no cenário -sX: 666.
+#  - A deteção (flags:FPU = FIN+PSH+URG, o scan Xmas) é boa. O problema é
+#    exclusivamente o operador de threshold.
+#
+# SUBSTITUÍDA POR: 3400105 (mesma deteção, `type both`) — que dispara UMA vez
+# e silencia durante o intervalo. Resultado medido: 666 -> 1 alerta.
+
+
+# -----------------------------------------------------------------------------
+# sid:3400020 — POSSBL SCAN SHELL M-SPLOIT TCP
+# -----------------------------------------------------------------------------
+# Regra original:
+# alert tcp any ![21,22,23,25,53,80,88,110,135,137,138,139,143,161,389,443,445,465,514,587,636,853,993,995,1194,1433,1720,3306,3389,8080,8443,11211,27017,51820] -> any 4444 (msg:"POSSBL SCAN SHELL M-SPLOIT TCP"; classtype:trojan-activity; sid:3400020; priority:1; rev:2;)
+#
+# PORQUE É RUIDOSA
+#  - NÃO TEM THRESHOLD NENHUM. Sem `threshold`/`detection_filter` não existe
+#    travão: dispara POR PACOTE.
+#  - Qualquer SYN para a porta 4444 cuja porta de origem esteja fora da lista
+#    gera alerta — inclusive scanners de portas comuns que toquem na 4444.
+#
+# SUBSTITUÍDA POR: 3400133 — que alerta UMA vez por origem/60s
+# (`type limit, count 1`) e, ao contrário desta, NÃO tem exceção de porta de
+# origem (fecha o desvio com `nmap -g 53`).
+
+
+# -----------------------------------------------------------------------------
+# sid:3400103 — LAB PORT SCAN (NMAP -sT win 64240)
+# -----------------------------------------------------------------------------
+# Regra original:
+# alert tcp any any -> any ![22,25,53,80,88,143,443,445,465,587,853,993,1194,8080,51820] (msg:"LAB PORT SCAN (NMAP -sT win 64240)"; flow:to_server; flags:S; window:64240; threshold:type threshold, track by_src, count 20, seconds 70; classtype:attempted-recon; sid:3400103; rev:1;)
+#
+# PORQUE É RUIDOSA
+#  🎯 A causa raiz é a IMPRESSÃO DIGITAL, e nenhum threshold a corrige.
+#  - `nmap -sT` faz um connect() completo: usa a pilha TCP do próprio sistema
+#    atacante. Logo NÃO produz uma impressão digital própria.
+#  - O valor `window:64240` é anunciado rotineiramente por stacks TCP reais
+#    (é um dos valores iniciais mais comuns em Windows e Linux modernos).
+#  - Resultado: a regra passa a significar "SYN para porta fora da lista, com
+#    janela 64240" — ou seja, corresponde a tráfego LEGÍTIMO de muitos hosts.
+#  - Aumentar a contagem ou mudar o tipo de threshold só reduz a FREQUÊNCIA
+#    dos alertas; a ABRANGÊNCIA do critério fica igual.
+#
+# SUBSTITUÍDA POR: nenhuma equivalente. A cobertura de -sT é dada pela 3400003
+# (janela 32120) e pela 3400130 (portas comuns, track by_both).
+
+
+# -----------------------------------------------------------------------------
+# sid:3400113 — LAB PORT SCAN (NMAP -sT win 64240) BOTH
+# -----------------------------------------------------------------------------
+# Regra original:
+# alert tcp any any -> any ![22,25,53,80,88,143,443,445,465,587,853,993,1194,8080,51820] (msg:"LAB PORT SCAN (NMAP -sT win 64240) BOTH"; flow:to_server; flags:S; window:64240; threshold:type both, track by_src, count 20, seconds 70; classtype:attempted-recon; sid:3400113; rev:1;)
+#
+# PORQUE É RUIDOSA
+#  - É a gémea da 3400103: único campo diferente é `threshold:type both`.
+#  - O critério de correspondência (window:64240) é igualmente largo.
+#  - PRINCÍPIO A RETER: `type both` limita a REPETIÇÃO dos alertas, não a
+#    ABRANGÊNCIA do critério. Um falso positivo continua a disparar — só
+#    dispara uma vez por intervalo em vez de repetidamente.
+#    `both` corrige ruído de excesso; não corrige ruído de erro.
+#
+# SUBSTITUÍDA POR: nenhuma equivalente (mesmo motivo da 3400103).
+
+
+# -----------------------------------------------------------------------------
+# sid:3400120 — POSSBL SCAN SHELL M-SPLOIT TCP LIMIT
+# -----------------------------------------------------------------------------
+# Regra original:
+# alert tcp any ![21,22,23,25,53,80,88,110,135,137,138,139,143,161,389,443,445,465,514,587,636,853,993,995,1194,1433,1720,3306,3389,8080,8443,11211,27017,51820] -> any 4444 (flow:to_server; flags:S; threshold:type limit, track by_src, count 1, seconds 60; msg:"POSSBL SCAN SHELL M-SPLOIT TCP LIMIT"; classtype:trojan-activity; sid:3400120; priority:1; rev:1;)
+#
+# PORQUE É RUIDOSA / INSUFICIENTE
+#  - É uma tentativa intermédia de domar a 3400020 com `type limit, count 1`.
+#    O operador domina a repetição — mas não resolve o problema de fundo.
+#  - FRAGILIDADE: mantém a exceção de porta de origem `![portas comuns]`.
+#    Um scan com `nmap -g 53` usa a porta de origem 53, que ESTÁ na lista,
+#    logo a regra não casa. É um bypass conhecido.
+#  - Redundante: a 3400133 faz o mesmo trabalho sem essa exceção.
+#
+# SUBSTITUÍDA POR: 3400133 (sem exceção de porta de origem, `type limit, count 1`).
+
+
+# =============================================================================
+# RESUMO DO QUE FOI APRENDIDO (para o write-up)
+# =============================================================================
+#  1. `type threshold` dispara repetidamente; `type both` dispara uma vez.
+#     Confundir os dois é a origem do cenário de 666 alertas.
+#  2. Thresholds corrigem FREQUÊNCIA. Não corrigem CRITÉRIOS LARGOS.
+#     (window:64240, alcance de destino "tudo o que não está na lista")
+#  3. Impressões digitais só servem quando o scan as controla. `-sT` usa a
+#     pilha do atacante — não tem assinatura própria fiável.
+#  4. Exceções de porta de origem criam bypasses (`-g 53`).
+#  5. Uma regra por deteção: pares duplicados (3400001/3400002,
+#     3400003/3400103, 3400020/3400120) somam alertas sem somar cobertura.
+# =============================================================================
