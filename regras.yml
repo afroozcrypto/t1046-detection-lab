@@ -1,0 +1,74 @@
+name: Regras
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  regras:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1. Lint que não precisa de Suricata nenhum — corre sempre.
+      - name: Lint das regras
+        run: make lint
+
+      # 2. Motor. ATENÇÃO: ubuntu-latest pode trazer Suricata 7.x.
+      #    Se o passo "Confirmar a versão" mostrar 7.x, fixa a imagem
+      #    ou usa um contentor com a 8.0.7 — sem versão fixa não há
+      #    reprodutibilidade.
+      - name: Instalar Suricata e scapy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y suricata python3-scapy make
+
+      - name: Confirmar a versão
+        run: suricata -V
+
+      - name: Validar sintaxe
+        run: make validar
+
+      # 3. Usa os pcaps versionados se existirem. Regenerar em cada corrida
+      #    só é seguro se o gerador for determinístico (seed fixa) — se não,
+      #    os números variam e este workflow falha sem haver regressão.
+      - name: Garantir pcaps
+        run: |
+          if [ -z "$(ls -A cenarios/pcaps 2>/dev/null)" ]; then
+            echo "Sem fixtures versionados — a gerar."
+            make pcaps
+          else
+            echo "A usar os pcaps versionados: $(ls cenarios/pcaps | wc -l) ficheiros"
+          fi
+
+      - name: Matriz offline
+        run: make matriz
+
+      - name: Publicar a matriz
+        uses: actions/upload-artifact@v4
+        with:
+          name: matriz-offline
+          path: resultados/matriz-offline-n4.json
+
+      # 4. O passo que impede a tabela do README de ficar stale:
+      #    se o total mudar, o PR falha e alguém tem de actualizar a tabela.
+      - name: Total esperado
+        run: |
+          ESPERADO=59
+          TOTAL=$(python3 -c "import json;d=json.load(open('resultados/matriz-offline-n4.json'));print(sum(sum(v.values()) for v in d.values()))")
+          echo "total medido: $TOTAL  (documentado: $ESPERADO)"
+          if [ "$TOTAL" != "$ESPERADO" ]; then
+            echo "::error::A matriz mudou ($TOTAL != $ESPERADO). Actualiza a tabela do README ou corrige as regras."
+            exit 1
+          fi
+
+      # 5. git status tem de ficar limpo: se algo escreveu num ficheiro
+      #    versionado, é sinal de que voltou o velho `sed -i`.
+      - name: Arvore limpa
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::Ficheiros versionados alterados durante os testes:"
+            git status --porcelain
+            exit 1
+          fi
