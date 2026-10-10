@@ -1,0 +1,9 @@
+Parte das regras em regras/ deriva de aleksibovellan/opnsense-suricata-nmaps
+(https://github.com/aleksibovellan/opnsense-suricata-nmaps), licenciado sob MIT.
+Essas regras mantêm a licença e o aviso de copyright do projeto original: ver o
+LICENSE desse repositório. As alterações (SIDs 34001xx e novos limiares) são
+deste projeto, também sob MIT.
+
+Parts of the rules in regras/ derive from aleksibovellan/opnsense-suricata-nmaps
+(MIT). They retain that project's license and copyright notice; see its LICENSE.
+Changes (SIDs 34001xx, new thresholds) are this project's, also MIT.
