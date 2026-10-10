@@ -59,7 +59,7 @@ vars:
 # The default logging directory.  Any log or output file will be
 # placed here if it's not specified with a full path name. This can be
 # overridden with the -l command line parameter.
-default-log-dir: /opt/suri8/var/log/suricata/
+default-log-dir: /var/log/suricata/
 
 # Global stats configuration
 stats:
@@ -2334,7 +2334,7 @@ napatech:
 ## Configure Suricata to load Suricata-Update managed rules.
 ##
 
-default-rule-path: /opt/suri8/var/lib/suricata/rules
+default-rule-path: /var/lib/suricata/rules
 
 rule-files:
   - suricata.rules
@@ -2343,8 +2343,8 @@ rule-files:
 ## Auxiliary configuration files.
 ##
 
-classification-file: /root/build/suricata/etc/classification.config
-reference-config-file: /root/build/suricata/etc/reference.config
+classification-file: /etc/suricata/classification.config
+reference-config-file: /etc/suricata/reference.config
 # threshold-file: /opt/suri8/etc/suricata/threshold.config
 
 ##
@@ -2374,3 +2374,5 @@ firewall:
 #include:
 #  - include1.yaml
 #  - include2.yaml
+
+[envelope] success=true result_type=str
