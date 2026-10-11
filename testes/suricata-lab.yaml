@@ -2374,5 +2374,3 @@ firewall:
 #include:
 #  - include1.yaml
 #  - include2.yaml
-
-[envelope] success=true result_type=str
