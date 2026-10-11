@@ -38,8 +38,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # O runner traz Suricata 7.0.3, que não serve. Usa o 8.0.7 em contentor,
-      # com o output em /tmp/out (o contentor corre com outro utilizador e não
-      # escreve no diretório de trabalho).
+      # como root (o utilizador do runner não lê /etc/suricata na imagem) e com
+      # o output em /tmp/out.
       - name: Suricata 8.0.7 em contentor
         run: |
           mkdir -p /tmp/out /tmp/suri-log
@@ -47,7 +47,6 @@ jobs:
           cat > /tmp/suri <<'SH'
           #!/bin/sh
           exec docker run --rm --entrypoint suricata \
-            --user "$(id -u):$(id -g)" \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -v /tmp:/tmp -w "$GITHUB_WORKSPACE" \
             jasonish/suricata:8.0.7 "$@"
           SH
