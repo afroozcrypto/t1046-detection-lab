@@ -1,0 +1,82 @@
+name: regras
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sintaxe dos scripts
+        run: |
+          bash -n testes/bateria.sh
+          python3 -m py_compile cenarios/gen_cenarios.py testes/matriz.py
+      - name: Regras bem formadas
+        run: |
+          # cada regra ativa tem msg, sid e rev; SIDs únicos
+          python3 - <<'PY'
+          import re, sys, collections
+          sids = []
+          for linha in open("regras/n4.rules", encoding="utf-8"):
+              if not linha.startswith("alert "):
+                  continue
+              for campo in ("msg:", "sid:", "rev:"):
+                  if campo not in linha:
+                      sys.exit(f"falta {campo} em: {linha[:80]}")
+              sids.append(re.search(r"sid:(\d+)", linha).group(1))
+          dup = [s for s, n in collections.Counter(sids).items() if n > 1]
+          if dup:
+              sys.exit(f"SIDs duplicados: {dup}")
+          print(len(sids), "regras ativas, SIDs únicos")
+          PY
+
+  matriz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # O runner traz Suricata 7.0.3, que não serve. Usa o 8.0.7 em contentor,
+      # como root (o utilizador do runner não lê /etc/suricata na imagem) e com
+      # o output em /tmp/out.
+      - name: Suricata 8.0.7 em contentor
+        run: |
+          mkdir -p /tmp/out /tmp/suri-log
+          chmod -R 777 /tmp/out /tmp/suri-log
+          cat > /tmp/suri <<'SH'
+          #!/bin/sh
+          exec docker run --rm --entrypoint suricata \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -v /tmp:/tmp -w "$GITHUB_WORKSPACE" \
+            jasonish/suricata:8.0.7 "$@"
+          SH
+          chmod +x /tmp/suri
+          /tmp/suri --build-info | grep -m1 "This is Suricata version"
+          /tmp/suri --build-info | grep -q "version 8.0.7"
+      - name: Validar regras (suricata -T)
+        run: |
+          /tmp/suri -T -c testes/suricata-lab.yaml -S regras/n4.rules -l /tmp/suri-log
+      - name: Matriz dos 19 pcaps
+        run: |
+          sed -i 's#^SURI = .*#SURI = "/tmp/suri"#' testes/matriz.py
+          python3 -I testes/matriz.py regras/n4.rules cenarios/pcaps /tmp/out/matriz.json
+      - name: Verificar resultados
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          d = json.load(open("/tmp/out/matriz.json"))
+          benignos = sum(sum(v.values()) for k, v in d.items() if k.startswith("benigno_"))
+          ataques = {k: sum(v.values()) for k, v in d.items() if k.startswith("ataque_")}
+          total = sum(ataques.values())
+          print("benignos:", benignos, "| ataques (alertas):", total, "| pcaps:", len(d))
+          # Números de referência da matriz (ver README): 59 alertas nos 19 pcaps, 0 nos benignos.
+          if benignos:
+              sys.exit("falsos positivos em tráfego benigno")
+          if total != 59:
+              sys.exit(f"total de alertas {total}, esperado 59")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: matriz
+          path: /tmp/out/matriz.json
