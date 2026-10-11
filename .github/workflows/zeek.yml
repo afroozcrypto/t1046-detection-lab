@@ -1,0 +1,49 @@
+name: zeek
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'zeek/**'
+      - 'cenarios/pcaps/**'
+      - '.github/workflows/zeek.yml'
+  pull_request:
+    paths:
+      - 'zeek/**'
+      - 'cenarios/pcaps/**'
+      - '.github/workflows/zeek.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  detetor:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detetor T1046 nos pcaps (Zeek 8.0.10)
+        run: |
+          fail=0; ataques=0; benignos=0
+          docker pull zeek/zeek:8.0.10 >/dev/null
+          for p in cenarios/pcaps/*.pcap; do
+            n=$(basename "$p" .pcap)
+            out="/tmp/zeek/$n"; mkdir -p "$out"
+            docker run --rm -v "$GITHUB_WORKSPACE:/w:ro" -v "$out:/out" -w /out \
+              zeek/zeek:8.0.10 zeek -C -r "/w/$p" /w/zeek/t1046-port-scan.zeek \
+              >/dev/null 2>"$out/err.txt" || true
+            c=0
+            if [ -f "$out/notice.log" ]; then
+              c=$(grep -c 'T1046::Port_Scan' "$out/notice.log" || true)
+            fi
+            case "$n" in
+              ataque_*)  ataques=$((ataques+1));   ok=$([ "$c" -ge 1 ] && echo OK || echo FALHA) ;;
+              benigno_*) benignos=$((benignos+1)); ok=$([ "$c" -eq 0 ] && echo OK || echo FALHA) ;;
+              *) continue ;;
+            esac
+            printf '%-28s alertas=%s %s\n' "$n" "$c" "$ok"
+            [ "$ok" = OK ] || fail=1
+          done
+          echo "ataques=$ataques benignos=$benignos"
+          [ "$ataques" -eq 13 ] && [ "$benignos" -eq 6 ] || { echo "contagem de pcaps inesperada"; fail=1; }
+          exit $fail
