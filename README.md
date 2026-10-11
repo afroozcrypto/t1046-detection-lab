@@ -97,6 +97,25 @@ make matriz    # total 59 (18 nos 9 cenários de ataque)
 
 > Fixa a versão do Suricata no CI. Reprodutibilidade sem versão fixa não é reprodutibilidade.
 
+## Scans lentos: Zeek
+
+O Suricata 8 conta pacotes, não portas distintas. O `detection_filter unique_on dst_port` só chega na 9.0 (GA prevista para Jul 2027). Por isso um `nmap -sS -T1` passa sem alertas.
+
+O script `zeek/t1046-port-scan.zeek` (Zeek 8, SumStats) alerta quando uma origem falha ligações TCP a **10 portas únicas** do mesmo alvo em 5 minutos. O workflow `zeek` valida-o em CI.
+
+| Teste | Resultado |
+|---|---|
+| Offline, 13 pcaps de ataque (incluindo T1, T2, delay 3s, decoys) | 13 de 13 alertam |
+| Offline, 6 pcaps benignos | 0 alertas (máximo: 2 portas únicas falhadas) |
+| Live, `nmap -sS -T1` a 14 portas comuns contra o OPNsense | Suricata 8.0.6: 0 alertas. Zeek 8.0.10: 1 alerta, aos 4m47s |
+
+Limites:
+- Pcaps sintéticos e um único alvo. Em rede real, varrimentos legítimos (monitorização, descoberta) dão falsos positivos.
+- Janela fixa de 5 min: um scan lento pode ser cortado entre duas janelas.
+- Só TCP. O limiar por omissão do antigo `scan.zeek` (15 portas) falharia o cenário T1, que tem 14.
+
+Correr localmente: `zeek -C -r cenarios/pcaps/ataque_sS_comuns_T1.pcap zeek/t1046-port-scan.zeek` e ver `notice.log`.
+
 ## Aviso
 
 Só em equipamento e redes tuas. Licença MIT (ver `LICENSE`).
@@ -104,6 +123,6 @@ Regras derivadas de aleksibovellan/opnsense-suricata-nmaps — ver `NOTICE`.
 
 ## Próximo
 
-- Camada comportamental para o `-T1`: Zeek + RITA (o OPNsense tem plugin de Zeek).
+- Camada comportamental para o `-T1`: Zeek feito (ver acima). Falta RITA.
 - Camada de endpoint: raw sockets criados por `-sS` são invisíveis à monitorização normal,
   mas visíveis por eBPF (Tetragon, Apache-2.0).
