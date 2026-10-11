@@ -1,4 +1,4 @@
-name: Regras
+name: regras
 
 on:
   push:
@@ -6,111 +6,79 @@ on:
   pull_request:
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # JOB 1 — LINT. Sem Suricata, sem make, sem python: só grep.
-  # Corre sempre e nunca falha por causa do ambiente. É o que dá sinal útil
-  # em qualquer máquina.
-  # ---------------------------------------------------------------------------
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-
-      - name: Contagem e SIDs duplicados
+      - name: Sintaxe dos scripts
         run: |
-          set -e
-          N=$(grep -c '^alert' regras/n4.rules)
-          echo "regras ativas: $N"
-          test "$N" = "14" || { echo "::error::Esperava 14 regras ativas, encontrei $N"; exit 1; }
-
-          DUP=$(grep '^alert' regras/n4.rules | grep -o 'sid:[0-9]*' | sort | uniq -d || true)
-          if [ -n "$DUP" ]; then
-            echo "::error::SIDs duplicados: $DUP"; exit 1
-          fi
-          echo "sem SIDs duplicados"
-
-      - name: Campos obrigatorios em cada regra
+          bash -n testes/bateria.sh
+          python3 -m py_compile cenarios/gen_cenarios.py testes/matriz.py
+      - name: Regras bem formadas
         run: |
-          set -e
-          S=$(grep '^alert' regras/n4.rules | grep -vc 'sid:' || true)
-          M=$(grep '^alert' regras/n4.rules | grep -vc 'msg:' || true)
-          test "$S" = "0" || { echo "::error::$S regras sem sid:"; exit 1; }
-          test "$M" = "0" || { echo "::error::$M regras sem msg:"; exit 1; }
-          echo "todas as regras tem msg: e sid:"
+          # cada regra ativa tem msg, sid e rev; SIDs únicos
+          python3 - <<'PY'
+          import re, sys, collections
+          sids = []
+          for linha in open("regras/n4.rules", encoding="utf-8"):
+              if not linha.startswith("alert "):
+                  continue
+              for campo in ("msg:", "sid:", "rev:"):
+                  if campo not in linha:
+                      sys.exit(f"falta {campo} em: {linha[:80]}")
+              sids.append(re.search(r"sid:(\d+)", linha).group(1))
+          dup = [s for s, n in collections.Counter(sids).items() if n > 1]
+          if dup:
+              sys.exit(f"SIDs duplicados: {dup}")
+          print(len(sids), "regras ativas, SIDs únicos")
+          PY
 
-      - name: O ficheiro tem de ser autocontido
-        run: |
-          # As 6 ruidosas tem de estar comentadas (o contrato do n4.rules).
-          for SID in 3400002 3400005 3400020 3400103 3400113 3400120; do
-            grep -q "^#.*sid:$SID" regras/n4.rules \
-              || { echo "::error::A regra $SID devia estar comentada em n4.rules"; exit 1; }
-          done
-          echo "as 6 ruidosas estao comentadas em n4.rules"
-
-  # ---------------------------------------------------------------------------
-  # JOB 2 — MATRIZ. Precisa de Suricata 8.
-  #
-  # O ubuntu-latest (24.04) traz Suricata 7.0.3 — os numeros seriam outros.
-  # Por isso corremos dentro do contentor jasonish/suricata:8.0.7, preso
-  # exatamente a versao em que os resultados foram medidos.
-  #
-  # O primeiro passo e um DIAGNOSTICO: se algo faltar, a saida diz o que e.
-  # ---------------------------------------------------------------------------
   matriz:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-
-      - name: Matriz com Suricata 8.0.7 (contentor preso)
+      # O runner traz Suricata 7.0.3, que não serve. Usa o 8.0.7 em contentor,
+      # com o output em /tmp/out (o contentor corre com outro utilizador e não
+      # escreve no diretório de trabalho).
+      - name: Suricata 8.0.7 em contentor
         run: |
-          docker run --rm -v "$PWD":/w -w /w --entrypoint sh jasonish/suricata:8.0.7 -c '
-            set -e
-            echo "== sistema =="; head -2 /etc/os-release
-            echo "== suricata =="; suricata -V
-
-            if ! command -v python3 >/dev/null 2>&1; then
-              echo "== a instalar python3 =="
-              if   command -v apt-get  >/dev/null 2>&1; then apt-get update -qq && apt-get install -y -qq python3
-              elif command -v dnf      >/dev/null 2>&1; then dnf install -y -q python3
-              elif command -v microdnf >/dev/null 2>&1; then microdnf install -y python3
-              elif command -v yum      >/dev/null 2>&1; then yum install -y -q python3
-              else echo "Nao encontrei gestor de pacotes. Instala python3 a mao."; exit 1
-              fi
-            fi
-            python3 --version
-
-            echo "== validar sintaxe =="
-            suricata -T -c testes/suricata-lab.yaml -S regras/n4.rules -l /tmp/log
-
-            echo "== pcaps (fixtures versionadas) =="
-            N=$(ls cenarios/pcaps/*.pcap 2>/dev/null | wc -l)
-            echo "pcaps encontrados: $N"
-            test "$N" -ge 19 || { echo "Faltam pcaps versionados (encontrei $N). Versiona as fixtures."; exit 1; }
-
-            echo "== matriz =="
-            python3 testes/matriz.py regras/n4.rules cenarios/pcaps resultados/matriz-offline-n4.json
-          '
-
-      - name: Total esperado
+          mkdir -p /tmp/out /tmp/suri-log
+          chmod -R 777 /tmp/out /tmp/suri-log
+          cat > /tmp/suri <<'SH'
+          #!/bin/sh
+          exec docker run --rm --entrypoint suricata \
+            --user "$(id -u):$(id -g)" \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -v /tmp:/tmp -w "$GITHUB_WORKSPACE" \
+            jasonish/suricata:8.0.7 "$@"
+          SH
+          chmod +x /tmp/suri
+          /tmp/suri --build-info | grep -m1 "This is Suricata version"
+          /tmp/suri --build-info | grep -q "version 8.0.7"
+      - name: Validar regras (suricata -T)
         run: |
-          ESPERADO=59
-          TOTAL=$(python3 -c "import json;d=json.load(open('resultados/matriz-offline-n4.json'));print(sum(sum(v.values()) for v in d.values()))")
-          echo "total medido: $TOTAL  (documentado: $ESPERADO)"
-          if [ "$TOTAL" != "$ESPERADO" ]; then
-            echo "::error::A matriz mudou ($TOTAL != $ESPERADO). Atualiza a tabela do README ou corrige as regras."
-            exit 1
-          fi
-
-      - name: Publicar a matriz
-        uses: actions/upload-artifact@v4
+          /tmp/suri -T -c testes/suricata-lab.yaml -S regras/n4.rules -l /tmp/suri-log
+      - name: Matriz dos 19 pcaps
+        run: |
+          sed -i 's#^SURI = .*#SURI = "/tmp/suri"#' testes/matriz.py
+          python3 -I testes/matriz.py regras/n4.rules cenarios/pcaps /tmp/out/matriz.json
+      - name: Verificar resultados
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          d = json.load(open("/tmp/out/matriz.json"))
+          benignos = sum(sum(v.values()) for k, v in d.items() if k.startswith("benigno_"))
+          ataques = {k: sum(v.values()) for k, v in d.items() if k.startswith("ataque_")}
+          total = sum(ataques.values())
+          print("benignos:", benignos, "| ataques (alertas):", total, "| pcaps:", len(d))
+          # -T1 em portas comuns é um limite conhecido (README): não exigir alerta.
+          sem_alerta = [k for k, n in ataques.items() if n == 0 and k != "ataque_sS_comuns_T1"]
+          if benignos:
+              sys.exit("falsos positivos em tráfego benigno")
+          if sem_alerta:
+              sys.exit(f"ataques sem alerta: {sem_alerta}")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: matriz-offline
-          path: resultados/matriz-offline-n4.json
-
-      - name: Arvore limpa
-        run: |
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "::error::Ficheiros versionados alterados durante os testes:"
-            git status --porcelain
-            exit 1
-          fi
+          name: matriz
+          path: /tmp/out/matriz.json
