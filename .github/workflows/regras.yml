@@ -69,12 +69,11 @@ jobs:
           ataques = {k: sum(v.values()) for k, v in d.items() if k.startswith("ataque_")}
           total = sum(ataques.values())
           print("benignos:", benignos, "| ataques (alertas):", total, "| pcaps:", len(d))
-          # -T1 em portas comuns é um limite conhecido (README): não exigir alerta.
-          sem_alerta = [k for k, n in ataques.items() if n == 0 and k != "ataque_sS_comuns_T1"]
+          # Números de referência da matriz (ver README): 59 alertas nos 19 pcaps, 0 nos benignos.
           if benignos:
               sys.exit("falsos positivos em tráfego benigno")
-          if sem_alerta:
-              sys.exit(f"ataques sem alerta: {sem_alerta}")
+          if total != 59:
+              sys.exit(f"total de alertas {total}, esperado 59")
           PY
       - uses: actions/upload-artifact@v4
         if: always()
