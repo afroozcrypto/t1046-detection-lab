@@ -1,5 +1,7 @@
 # t1046-detection-lab
 
+[![regras](https://github.com/afroozcrypto/t1046-detection-lab/actions/workflows/regras.yml/badge.svg)](https://github.com/afroozcrypto/t1046-detection-lab/actions/workflows/regras.yml) ![licença MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-blue) ![Suricata 8.0.7](https://img.shields.io/badge/Suricata-8.0.7-orange)
+
 Deteção de port scans (nmap) com Suricata em OPNsense, testada em laboratório.
 MITRE ATT&CK **T1046 — Network Service Discovery** (referência: ATT&CK **v19.2**, agosto 2026).
 
